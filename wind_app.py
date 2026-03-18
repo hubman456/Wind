@@ -501,10 +501,6 @@ cum_msa = daily["MSA_count"].sum() / daily["total"].sum() * 100 if daily["total"
 cum_mpda = daily["MPDA_count"].sum() / daily["total"].sum() * 100 if daily["total"].sum() > 0 else np.nan
 
 st.write(
-    f"누적 MSA: **{'-' if pd.isna(cum_msa) else f'{cum_msa:.2f}%'}** "
-    f"(유효 {daily['MSA_count'].sum():,} / 전체 {daily['total'].sum():,})"
-)
-st.write(
     f"누적 MPDA: **{'-' if pd.isna(cum_mpda) else f'{cum_mpda:.2f}%'}** "
     f"(유효 {daily['MPDA_count'].sum():,} / 전체 {daily['total'].sum():,})"
 )
