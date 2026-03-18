@@ -106,6 +106,7 @@ with st.expander("현재 컬럼명 확인"):
 # ============================================================
 time_col = "Time and Date"
 temp_col = "Met Air Temp. (C)"
+pressure_col = "Met Pressure (mbar)"
 
 if time_col not in df.columns:
     st.error(f"시간 컬럼을 찾지 못했습니다: {time_col}")
@@ -114,6 +115,9 @@ if time_col not in df.columns:
 
 if temp_col not in df.columns:
     temp_col = None
+
+if pressure_col not in df.columns:
+    pressure_col = None
 
 # ============================================================
 # 높이 추출
@@ -172,6 +176,8 @@ df = df.dropna(subset=[time_col]).sort_values(time_col)
 numeric_cols = [ws_col, wd_col, ti_col]
 if temp_col is not None:
     numeric_cols.append(temp_col)
+if pressure_col is not None:
+    numeric_cols.append(pressure_col)
 
 for col in numeric_cols:
     df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -194,6 +200,7 @@ if use_ti_filter:
 with st.expander("사용 컬럼 확인"):
     st.write("시간 컬럼:", time_col)
     st.write("온도 컬럼:", temp_col)
+    st.write("Pressure 컬럼:", pressure_col)
     st.write("풍속 컬럼:", ws_col)
     st.write("풍향 컬럼:", wd_col)
     st.write("난류강도 컬럼:", ti_col)
@@ -213,6 +220,7 @@ avg_ws = df[ws_col].mean()
 max_ws_val = df[ws_col].max()
 avg_wd = circular_mean_deg(df[wd_col])
 avg_temp = df[temp_col].mean() if temp_col is not None else np.nan
+avg_pressure = df[pressure_col].mean() if pressure_col is not None else np.nan
 avg_ti = df[ti_col].mean()
 
 c1, c2, c3 = st.columns(3)
@@ -230,13 +238,16 @@ with c4:
 with c5:
     st.metric("평균 온도", "-" if pd.isna(avg_temp) else f"{avg_temp:.2f}")
 with c6:
-    st.metric("평균 난류강도", "-" if pd.isna(avg_ti) else f"{avg_ti:.3f}")
+    st.metric("평균 Pressure", "-" if pd.isna(avg_pressure) else f"{avg_pressure:.2f}")
 
 st.write(f"업로드 파일 수: **{len(uploaded_files)}개**")
 st.dataframe(
     pd.DataFrame({"파일명": [f.name for f in uploaded_files]}),
     use_container_width=True
 )
+
+# 난류강도 평균은 별도로 한 줄 더 표시
+st.write(f"평균 난류강도: **{'-' if pd.isna(avg_ti) else f'{avg_ti:.3f}'}**")
 
 # ============================================================
 # 그래프
@@ -270,7 +281,7 @@ st.pyplot(fig2)
 if temp_col is not None:
     st.markdown("### 3) 온도 그래프")
     fig3 = plt.figure(figsize=(12, 4))
-    plt.plot(df[time_col], df[temp_col])
+    plt.plot(df[time_col], df[temp_col], color="orange")
     plt.title("Met Air Temperature")
     plt.xlabel("Time")
     plt.ylabel("Temperature (C)")
@@ -289,12 +300,24 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 st.pyplot(fig4)
 
+# 5) Pressure 그래프
+if pressure_col is not None:
+    st.markdown("### 5) Pressure 그래프")
+    fig5 = plt.figure(figsize=(12, 4))
+    plt.plot(df[time_col], df[pressure_col], color="purple")
+    plt.title("Met Pressure")
+    plt.xlabel("Time")
+    plt.ylabel("Pressure (mbar)")
+    plt.xticks(rotation=30)
+    plt.tight_layout()
+    st.pyplot(fig5)
+
 # ============================================================
 # Wind Rose
 # - 방향: 10분 원형평균
 # - 풍속: 10분 평균
 # ============================================================
-st.markdown("### 5) Wind Rose (10분 원형평균 풍향 기준)")
+st.markdown("### 6) Wind Rose (10분 원형평균 풍향 기준)")
 
 try:
     from windrose import WindroseAxes
@@ -343,5 +366,7 @@ st.subheader("📋 데이터 미리보기")
 preview_cols = [time_col, ws_col, wd_col, ti_col, "source_file"]
 if temp_col is not None:
     preview_cols.insert(3, temp_col)
+if pressure_col is not None:
+    preview_cols.insert(4 if temp_col is not None else 3, pressure_col)
 
 st.dataframe(df[preview_cols].head(50), use_container_width=True)
