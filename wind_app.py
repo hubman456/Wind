@@ -16,7 +16,7 @@ with col1:
     st.image("logo.png", width=80)
 
 with col2:
-    st.markdown("## Wind Monitoring Dashboard")
+    st.markdown("Wind Monitoring Dashboard")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
