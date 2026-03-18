@@ -10,7 +10,13 @@ import streamlit as st
 # 기본 설정
 # ============================================================
 st.set_page_config(page_title="Wind Monitoring Dashboard", layout="wide")
-st.title("🌬 Wind Monitoring Dashboard")
+col1, col2 = st.columns([1, 6])
+
+with col1:
+    st.image("logo.png", width=80)
+
+with col2:
+    st.markdown("## Wind Monitoring Dashboard")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
