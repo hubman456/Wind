@@ -41,25 +41,69 @@ def find_time_column(df):
             return col
     return None
 
-def circular_mean_deg(series):
-    """파향 평균용 원형평균"""
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if len(s) == 0:
-        return np.nan
-    rad = np.deg2rad(s)
-    mean_sin = np.sin(rad).mean()
-    mean_cos = np.cos(rad).mean()
-    angle = np.rad2deg(np.arctan2(mean_sin, mean_cos))
-    return (angle + 360) % 360
-
 def get_existing_col(df, candidates):
     for c in candidates:
         if c in df.columns:
             return c
     return None
 
+def circular_mean_deg(series):
+    """파향 평균용 원형평균"""
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) == 0:
+        return np.nan
+
+    rad = np.deg2rad(s)
+    mean_sin = np.sin(rad).mean()
+    mean_cos = np.cos(rad).mean()
+    angle = np.rad2deg(np.arctan2(mean_sin, mean_cos))
+    return (angle + 360) % 360
+
+def parse_datetime_series(series):
+    """
+    날짜 자동 파싱
+    - YYYY.MM.DD HH:MM:SS
+    - YYYY-MM-DD HH:MM:SS
+    - DD/MM/YYYY HH:MM:SS
+    등을 최대한 안전하게 처리
+    """
+    s = series.astype(str).str.strip()
+
+    # 1차: 일반 파싱
+    dt = pd.to_datetime(s, errors="coerce")
+
+    # 2차: dayfirst=True 재시도
+    mask = dt.isna()
+    if mask.any():
+        dt2 = pd.to_datetime(s[mask], errors="coerce", dayfirst=True)
+        dt.loc[mask] = dt2
+
+    # 3차: 자주 쓰는 형식 직접 지정
+    known_formats = [
+        "%Y.%m.%d %H:%M:%S",
+        "%Y.%m.%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+    ]
+
+    for fmt in known_formats:
+        mask = dt.isna()
+        if not mask.any():
+            break
+        try:
+            dt_try = pd.to_datetime(s[mask], format=fmt, errors="coerce")
+            dt.loc[mask] = dt_try
+        except Exception:
+            pass
+
+    return dt
+
 # ============================================================
-# 데이터 읽기
+# 메인
 # ============================================================
 if uploaded_files:
     dfs = []
@@ -101,12 +145,36 @@ if uploaded_files:
     ])
 
     # ========================================================
+    # 컬럼 확인 표시
+    # ========================================================
+    with st.expander("사용 컬럼 확인"):
+        st.write("시간 컬럼:", time_col)
+        st.write("온도 컬럼:", temp_col)
+        st.write("파주기 컬럼:", period_col)
+        st.write("유의파고 컬럼:", sig_wave_col)
+        st.write("파고 컬럼:", wave_col)
+        st.write("파향 컬럼:", dir_col)
+
+    # ========================================================
     # 시간 처리
     # ========================================================
-    if time_col is not None:
-        df[time_col] = pd.to_datetime(df[time_col], errors="coerce", dayfirst=True)
-        df = df.dropna(subset=[time_col])
-        df = df.sort_values(time_col)
+    if time_col is None:
+        st.error("시간 컬럼을 찾지 못했습니다. (예: Time and Date)")
+        st.stop()
+
+    raw_time_sample = df[time_col].astype(str).head(10).tolist()
+
+    df[time_col] = parse_datetime_series(df[time_col])
+    invalid_time_count = df[time_col].isna().sum()
+
+    df = df.dropna(subset=[time_col])
+    df = df.sort_values(time_col)
+
+    with st.expander("시간 파싱 확인"):
+        st.write("원본 시간 샘플:", raw_time_sample)
+        st.write("변환 실패 개수:", int(invalid_time_count))
+        st.write("최소 시간:", df[time_col].min())
+        st.write("최대 시간:", df[time_col].max())
 
     # ========================================================
     # 숫자형 변환
@@ -118,8 +186,6 @@ if uploaded_files:
     # ========================================================
     # 필터 적용
     # ========================================================
-    before_count = len(df)
-
     if wave_col is not None:
         df.loc[df[wave_col] > max_wave, wave_col] = np.nan
 
@@ -128,8 +194,6 @@ if uploaded_files:
 
     if period_col is not None:
         df.loc[df[period_col] > max_period, period_col] = np.nan
-
-    after_count = len(df)
 
     # ========================================================
     # 데이터 정보
@@ -159,23 +223,37 @@ if uploaded_files:
     with c6:
         st.metric("평균 유의파고", "-" if pd.isna(avg_sig_wave) else f"{avg_sig_wave:.2f}")
 
-    # ========================================================
-    # 업로드 파일 정보
-    # ========================================================
     st.write(f"업로드 파일 수: **{len(uploaded_files)}개**")
-    st.write("업로드 파일명:")
-    st.dataframe(pd.DataFrame({"파일명": [f.name for f in uploaded_files]}), use_container_width=True)
+    st.dataframe(
+        pd.DataFrame({"파일명": [f.name for f in uploaded_files]}),
+        use_container_width=True
+    )
+
+    # ========================================================
+    # 10분 원형평균 파향 + 10분 평균 유의파고 (Wave Rose용)
+    # ========================================================
+    sea_rose = None
+
+    if dir_col is not None and sig_wave_col is not None:
+        df_rose = df[[time_col, dir_col, sig_wave_col]].copy()
+        df_rose = df_rose.dropna(subset=[time_col])
+        df_rose = df_rose.sort_values(time_col)
+        df_rose = df_rose.set_index(time_col)
+
+        dir_10 = df_rose[dir_col].resample("10min").apply(circular_mean_deg)
+        hs_10 = df_rose[sig_wave_col].resample("10min").mean()
+
+        sea_rose = pd.DataFrame({
+            "MeanDir_deg": dir_10,
+            "Hs_10": hs_10
+        }).dropna()
 
     # ========================================================
     # 그래프
     # ========================================================
     st.subheader("📈 그래프")
 
-    if time_col is None:
-        st.error("시간 컬럼을 찾지 못했습니다. (예: Time and Date)")
-        st.stop()
-
-    # 온도 그래프
+    # 1) 온도
     if temp_col is not None:
         st.markdown("### 1) 온도 그래프")
         fig = plt.figure(figsize=(12, 4))
@@ -187,7 +265,7 @@ if uploaded_files:
         plt.tight_layout()
         st.pyplot(fig)
 
-    # 파주기 그래프
+    # 2) 파주기
     if period_col is not None:
         st.markdown("### 2) 파주기 그래프")
         fig = plt.figure(figsize=(12, 4))
@@ -199,7 +277,7 @@ if uploaded_files:
         plt.tight_layout()
         st.pyplot(fig)
 
-    # 유의파고 그래프
+    # 3) 유의파고
     if sig_wave_col is not None:
         st.markdown("### 3) 유의파고 그래프")
         fig = plt.figure(figsize=(12, 4))
@@ -211,7 +289,7 @@ if uploaded_files:
         plt.tight_layout()
         st.pyplot(fig)
 
-    # 파고 그래프
+    # 4) 파고
     if wave_col is not None:
         st.markdown("### 4) 파고 그래프")
         fig = plt.figure(figsize=(12, 4))
@@ -223,7 +301,7 @@ if uploaded_files:
         plt.tight_layout()
         st.pyplot(fig)
 
-    # 파향 그래프
+    # 5) 파향
     if dir_col is not None:
         st.markdown("### 5) 파향 그래프")
         fig = plt.figure(figsize=(12, 4))
@@ -236,11 +314,50 @@ if uploaded_files:
         plt.tight_layout()
         st.pyplot(fig)
 
+    # 6) Wave Rose
+    if sea_rose is not None and len(sea_rose) > 0:
+        st.markdown("### 6) Wave Rose (10분 원형평균 파향 기준)")
+
+        try:
+            from windrose import WindroseAxes
+
+            fig_r = plt.figure(figsize=(8, 8))
+            ax_r = WindroseAxes.from_ax(fig=fig_r)
+
+            hmax = sea_rose["Hs_10"].max()
+
+            if pd.isna(hmax) or hmax <= 0:
+                st.warning("Wave Rose를 그릴 유의파고 데이터가 부족합니다.")
+            else:
+                bins = np.linspace(0, hmax, 6)
+
+                ax_r.bar(
+                    sea_rose["MeanDir_deg"],
+                    sea_rose["Hs_10"],
+                    normed=True,
+                    opening=0.8,
+                    edgecolor="white",
+                    bins=bins
+                )
+
+                ax_r.set_title("Wave Rose (10-min Circular Mean Direction + Hs)")
+                ax_r.set_legend(title="Hs")
+                st.pyplot(fig_r)
+
+        except Exception as e:
+            st.warning(f"Wave Rose 생성 실패: {e}")
+
+    else:
+        st.info("Wave Rose를 그릴 수 있는 파향/유의파고 데이터가 부족합니다.")
+
     # ========================================================
-    # 원본/가공 데이터 미리보기
+    # 데이터 미리보기
     # ========================================================
     st.subheader("📋 데이터 미리보기")
-    show_cols = [c for c in [time_col, temp_col, period_col, sig_wave_col, wave_col, dir_col, "source_file"] if c is not None]
+    show_cols = [
+        c for c in [time_col, temp_col, period_col, sig_wave_col, wave_col, dir_col, "source_file"]
+        if c is not None
+    ]
     st.dataframe(df[show_cols].head(50), use_container_width=True)
 
 else:
