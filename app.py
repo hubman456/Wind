@@ -61,24 +61,11 @@ def circular_mean_deg(series):
 
 def parse_datetime_series(series):
     """
-    날짜 자동 파싱
-    - YYYY.MM.DD HH:MM:SS
-    - YYYY-MM-DD HH:MM:SS
-    - DD/MM/YYYY HH:MM:SS
-    등을 최대한 안전하게 처리
+    날짜 파싱을 안전하게 수행
+    자동 추측 최소화
     """
     s = series.astype(str).str.strip()
 
-    # 1차: 일반 파싱
-    dt = pd.to_datetime(s, errors="coerce")
-
-    # 2차: dayfirst=True 재시도
-    mask = dt.isna()
-    if mask.any():
-        dt2 = pd.to_datetime(s[mask], errors="coerce", dayfirst=True)
-        dt.loc[mask] = dt2
-
-    # 3차: 자주 쓰는 형식 직접 지정
     known_formats = [
         "%Y.%m.%d %H:%M:%S",
         "%Y.%m.%d %H:%M",
@@ -90,17 +77,25 @@ def parse_datetime_series(series):
         "%m/%d/%Y %H:%M",
     ]
 
+    best_dt = None
+    best_valid_count = -1
+
     for fmt in known_formats:
-        mask = dt.isna()
-        if not mask.any():
-            break
         try:
-            dt_try = pd.to_datetime(s[mask], format=fmt, errors="coerce")
-            dt.loc[mask] = dt_try
+            dt_try = pd.to_datetime(s, format=fmt, errors="coerce")
+            valid_count = dt_try.notna().sum()
+
+            if valid_count > best_valid_count:
+                best_valid_count = valid_count
+                best_dt = dt_try
         except Exception:
             pass
 
-    return dt
+    # 위 형식들로 안 되면 마지막으로 일반 파싱
+    if best_dt is None or best_valid_count == 0:
+        best_dt = pd.to_datetime(s, errors="coerce")
+
+    return best_dt
 
 # ============================================================
 # 메인
