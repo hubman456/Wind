@@ -28,7 +28,10 @@ with col2:
         """,
         unsafe_allow_html=True
     )
-
+st.markdown(
+    "<hr style='border: 1px solid #D6E9FF; margin-top: 0.5rem; margin-bottom: 1rem;'>",
+    unsafe_allow_html=True
+)
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
