@@ -570,32 +570,6 @@ st.write(
     f"(유효 {daily['MPDA_count'].sum():,} / 전체 {daily['total'].sum():,})"
 )
 
-# 9) GPS 좌표 그림
-st.markdown("### 9) GPS 좌표 그림")
-
-gps_plot_df = df[["latitude", "longitude", time_col]].dropna().copy()
-
-if len(gps_plot_df) == 0:
-    st.info("GPS 좌표 데이터가 없어 그림을 그릴 수 없습니다.")
-else:
-    fig_gps = plt.figure(figsize=(8, 8))
-    plt.scatter(gps_plot_df["longitude"], gps_plot_df["latitude"], s=8)
-
-    start_row = gps_plot_df.iloc[0]
-    end_row = gps_plot_df.iloc[-1]
-
-    plt.scatter(start_row["longitude"], start_row["latitude"], s=60, marker="o", label="Start")
-    plt.scatter(end_row["longitude"], end_row["latitude"], s=80, marker="*", label="End")
-
-    plt.title("GPS Track")
-    plt.xlabel("Longitude")
-    plt.ylabel("Latitude")
-    plt.legend()
-    plt.tight_layout()
-    st.pyplot(fig_gps)
-
-    st.write(f"시작 좌표: **({start_row['latitude']:.6f}, {start_row['longitude']:.6f})**")
-    st.write(f"마지막 좌표: **({end_row['latitude']:.6f}, {end_row['longitude']:.6f})**")
 
 # ============================================================
 # 데이터 미리보기
