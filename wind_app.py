@@ -4,6 +4,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 
+# ============================================================
+# 기본 설정
+# ============================================================
 st.set_page_config(page_title="Wind Monitoring Dashboard", layout="wide")
 st.title("🌬 Wind Monitoring Dashboard")
 
@@ -11,6 +14,7 @@ st.title("🌬 Wind Monitoring Dashboard")
 # 유틸 함수
 # ============================================================
 def circular_mean_deg(series):
+    """풍향 원형평균"""
     s = pd.to_numeric(series, errors="coerce").dropna()
     if len(s) == 0:
         return np.nan
@@ -22,22 +26,8 @@ def circular_mean_deg(series):
     return (angle + 360) % 360
 
 
-def parse_time_series(series):
-    s = series.astype(str).str.strip()
-
-    # 1차: 일반 파싱
-    dt = pd.to_datetime(s, errors="coerce")
-
-    # 2차: dayfirst 재시도
-    mask = dt.isna()
-    if mask.any():
-        dt2 = pd.to_datetime(s[mask], errors="coerce", dayfirst=True)
-        dt.loc[mask] = dt2
-
-    return dt
-
-
 def extract_available_heights(columns):
+    """헤더에서 사용 가능한 높이 목록 추출"""
     heights = set()
 
     patterns = [
@@ -47,15 +37,16 @@ def extract_available_heights(columns):
     ]
 
     for col in columns:
-        for p in patterns:
-            m = re.search(p, col)
+        for pattern in patterns:
+            m = re.search(pattern, str(col))
             if m:
                 heights.add(int(m.group(1)))
 
     return sorted(heights, reverse=True)
 
 
-def get_col_for_height(height):
+def get_height_columns(height):
+    """선택 높이에 해당하는 컬럼명 생성"""
     wd_col = f"Wind Direction (deg) at {height}m (corrected)"
     ws_col = f"Horizontal Wind Speed (m/s) at {height}m"
     ti_col = f"TI at {height}m"
@@ -77,14 +68,23 @@ if not uploaded_files:
 
 # ============================================================
 # CSV 읽기
+# - 첫 줄은 메타정보
+# - 둘째 줄이 실제 헤더이므로 header=1
 # ============================================================
 dfs = []
+
 for f in uploaded_files:
     try:
-        df_temp = pd.read_csv(f)
-        df_temp.columns = df_temp.columns.str.strip()
+        try:
+            df_temp = pd.read_csv(f, header=1, encoding="utf-8-sig")
+        except:
+            f.seek(0)
+            df_temp = pd.read_csv(f, header=1, encoding="cp949")
+
+        df_temp.columns = df_temp.columns.astype(str).str.strip()
         df_temp["source_file"] = f.name
         dfs.append(df_temp)
+
     except Exception as e:
         st.warning(f"{f.name} 읽기 실패: {e}")
 
@@ -93,6 +93,13 @@ if len(dfs) == 0:
     st.stop()
 
 df = pd.concat(dfs, ignore_index=True)
+
+# ============================================================
+# 컬럼 확인용 출력
+# ============================================================
+with st.expander("현재 컬럼명 확인"):
+    st.write("컬럼 개수:", len(df.columns))
+    st.write("앞 30개 컬럼명:", list(df.columns[:30]))
 
 # ============================================================
 # 기본 컬럼 지정
@@ -114,7 +121,7 @@ if temp_col not in df.columns:
 available_heights = extract_available_heights(df.columns)
 
 if len(available_heights) == 0:
-    st.error("풍속/풍향/TI 높이 컬럼을 찾지 못했습니다.")
+    st.error("높이별 풍속/풍향/TI 컬럼을 찾지 못했습니다.")
     st.write("현재 컬럼명:", list(df.columns))
     st.stop()
 
@@ -141,7 +148,7 @@ with st.sidebar:
     max_ti = st.number_input("난류강도 최대값", value=1.0)
 
 # 선택 높이 컬럼명
-wd_col, ws_col, ti_col = get_col_for_height(selected_height)
+wd_col, ws_col, ti_col = get_height_columns(selected_height)
 
 missing_cols = [c for c in [wd_col, ws_col, ti_col] if c not in df.columns]
 if missing_cols:
@@ -150,10 +157,11 @@ if missing_cols:
 
 # ============================================================
 # 시간 처리
+# - 예: 01/08/2025 00:00 -> dayfirst=True
 # ============================================================
 raw_time_sample = df[time_col].astype(str).head(10).tolist()
 
-df[time_col] = parse_time_series(df[time_col])
+df[time_col] = pd.to_datetime(df[time_col], errors="coerce", dayfirst=True)
 invalid_time_count = df[time_col].isna().sum()
 
 df = df.dropna(subset=[time_col]).sort_values(time_col)
@@ -181,7 +189,7 @@ if use_ti_filter:
     df.loc[df[ti_col] > max_ti, ti_col] = np.nan
 
 # ============================================================
-# 컬럼/시간 확인
+# 사용 컬럼 / 시간 확인
 # ============================================================
 with st.expander("사용 컬럼 확인"):
     st.write("시간 컬럼:", time_col)
@@ -235,7 +243,7 @@ st.dataframe(
 # ============================================================
 st.subheader(f"📈 그래프 ({selected_height}m 기준)")
 
-# 1) 풍속
+# 1) 풍속 그래프
 st.markdown("### 1) 풍속 그래프")
 fig1 = plt.figure(figsize=(12, 4))
 plt.plot(df[time_col], df[ws_col])
@@ -246,7 +254,7 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 st.pyplot(fig1)
 
-# 2) 풍향
+# 2) 풍향 그래프
 st.markdown("### 2) 풍향 그래프")
 fig2 = plt.figure(figsize=(12, 4))
 plt.plot(df[time_col], df[wd_col])
@@ -258,7 +266,7 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 st.pyplot(fig2)
 
-# 3) 온도
+# 3) 온도 그래프
 if temp_col is not None:
     st.markdown("### 3) 온도 그래프")
     fig3 = plt.figure(figsize=(12, 4))
@@ -270,7 +278,7 @@ if temp_col is not None:
     plt.tight_layout()
     st.pyplot(fig3)
 
-# 4) 난류강도
+# 4) 난류강도 그래프
 st.markdown("### 4) 난류강도 그래프")
 fig4 = plt.figure(figsize=(12, 4))
 plt.plot(df[time_col], df[ti_col])
@@ -331,6 +339,7 @@ except Exception as e:
 # 데이터 미리보기
 # ============================================================
 st.subheader("📋 데이터 미리보기")
+
 preview_cols = [time_col, ws_col, wd_col, ti_col, "source_file"]
 if temp_col is not None:
     preview_cols.insert(3, temp_col)
