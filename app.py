@@ -104,7 +104,7 @@ if uploaded_files:
     # 시간 처리
     # ========================================================
     if time_col is not None:
-        df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+        df[time_col] = pd.to_datetime(df[time_col], errors="coerce", dayfirst=True)
         df = df.dropna(subset=[time_col])
         df = df.sort_values(time_col)
 
