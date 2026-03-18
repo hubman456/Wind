@@ -1,4 +1,6 @@
 import re
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,6 +11,12 @@ import streamlit as st
 # ============================================================
 st.set_page_config(page_title="Wind Monitoring Dashboard", layout="wide")
 st.title("🌬 Wind Monitoring Dashboard")
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+LATEST_DATA_PATH = DATA_DIR / "latest_wind_dashboard.parquet"
+LATEST_META_PATH = DATA_DIR / "latest_wind_dashboard_meta.csv"
 
 # ============================================================
 # 유틸 함수
@@ -57,13 +65,11 @@ def get_height_columns(height):
 
 def parse_gps_column(series):
     """
-    GPS 컬럼 예시:
+    GPS 예시:
     '35.62986 125.90870'
     -> latitude, longitude 분리
     """
     s = series.astype(str).str.strip()
-
-    # 쉼표/탭도 공백으로 통일
     s = s.str.replace(",", " ", regex=False)
     s = s.str.replace("\t", " ", regex=False)
 
@@ -81,46 +87,109 @@ def parse_gps_column(series):
     })
 
 
+def read_uploaded_csvs(uploaded_files):
+    """
+    업로드한 CSV 읽기
+    - 첫 줄은 메타정보
+    - 둘째 줄이 실제 헤더
+    """
+    dfs = []
+
+    for f in uploaded_files:
+        try:
+            try:
+                df_temp = pd.read_csv(f, header=1, encoding="utf-8-sig")
+            except Exception:
+                f.seek(0)
+                df_temp = pd.read_csv(f, header=1, encoding="cp949")
+
+            df_temp.columns = df_temp.columns.astype(str).str.strip()
+            df_temp["source_file"] = f.name
+            dfs.append(df_temp)
+
+        except Exception as e:
+            st.warning(f"{f.name} 읽기 실패: {e}")
+
+    if len(dfs) == 0:
+        return None
+
+    return pd.concat(dfs, ignore_index=True)
+
+
+def save_latest_data(df):
+    df.to_parquet(LATEST_DATA_PATH, index=False)
+
+    meta = pd.DataFrame({
+        "saved_at": [pd.Timestamp.now()],
+        "row_count": [len(df)]
+    })
+    meta.to_csv(LATEST_META_PATH, index=False)
+
+
+def load_latest_data():
+    if not LATEST_DATA_PATH.exists():
+        return None
+    return pd.read_parquet(LATEST_DATA_PATH)
+
+
+def load_latest_meta():
+    if not LATEST_META_PATH.exists():
+        return None
+    try:
+        return pd.read_csv(LATEST_META_PATH)
+    except Exception:
+        return None
+
+
 # ============================================================
-# 파일 업로드
+# 관리자 여부
 # ============================================================
-uploaded_files = st.file_uploader(
-    "CSV 파일 업로드 (여러 개 가능)",
-    type=["csv"],
-    accept_multiple_files=True
+admin_password_input = st.sidebar.text_input(
+    "관리자 비밀번호",
+    type="password"
 )
 
-if not uploaded_files:
-    st.info("CSV 파일을 한 개 이상 업로드해 주세요.")
-    st.stop()
+admin_password = st.secrets.get("ADMIN_PASSWORD", "")
+is_admin = (admin_password_input == admin_password and admin_password != "")
+
+if is_admin:
+    st.sidebar.success("관리자 모드")
+else:
+    st.sidebar.info("보기 전용 모드")
 
 # ============================================================
-# CSV 읽기
-# - 첫 줄은 메타정보
-# - 둘째 줄이 실제 헤더
+# 관리자만 업로드 가능
 # ============================================================
-dfs = []
+uploaded_files = None
 
-for f in uploaded_files:
-    try:
-        try:
-            df_temp = pd.read_csv(f, header=1, encoding="utf-8-sig")
-        except:
-            f.seek(0)
-            df_temp = pd.read_csv(f, header=1, encoding="cp949")
+if is_admin:
+    st.sidebar.markdown("### 관리자 업로드")
+    uploaded_files = st.sidebar.file_uploader(
+        "CSV 파일 업로드 (여러 개 가능)",
+        type=["csv"],
+        accept_multiple_files=True
+    )
 
-        df_temp.columns = df_temp.columns.astype(str).str.strip()
-        df_temp["source_file"] = f.name
-        dfs.append(df_temp)
+    if uploaded_files:
+        if st.sidebar.button("업로드 데이터 저장 / 갱신"):
+            df_uploaded = read_uploaded_csvs(uploaded_files)
 
-    except Exception as e:
-        st.warning(f"{f.name} 읽기 실패: {e}")
+            if df_uploaded is None or len(df_uploaded) == 0:
+                st.sidebar.error("읽을 수 있는 CSV가 없습니다.")
+            else:
+                save_latest_data(df_uploaded)
+                st.sidebar.success("최신 데이터 저장 완료")
+                st.rerun()
 
-if len(dfs) == 0:
-    st.error("읽을 수 있는 CSV 파일이 없습니다.")
+# ============================================================
+# 저장된 최신 데이터 읽기
+# ============================================================
+df = load_latest_data()
+meta = load_latest_meta()
+
+if df is None:
+    st.warning("아직 저장된 데이터가 없습니다. 관리자만 CSV 업로드 후 저장할 수 있습니다.")
     st.stop()
-
-df = pd.concat(dfs, ignore_index=True)
 
 # ============================================================
 # 컬럼 확인
@@ -128,6 +197,12 @@ df = pd.concat(dfs, ignore_index=True)
 with st.expander("현재 컬럼명 확인"):
     st.write("컬럼 개수:", len(df.columns))
     st.write("앞 30개 컬럼명:", list(df.columns[:30]))
+
+if meta is not None and len(meta) > 0:
+    st.write(
+        f"최신 저장 시각: **{meta.loc[0, 'saved_at']}**, "
+        f"저장 행 수: **{int(meta.loc[0, 'row_count']):,}**"
+    )
 
 # ============================================================
 # 기본 컬럼
@@ -162,7 +237,7 @@ if len(available_heights) == 0:
     st.stop()
 
 # ============================================================
-# 사이드바
+# 사이드바 필터 (모든 사용자 가능)
 # ============================================================
 with st.sidebar:
     st.header("⚙ 필터 설정")
@@ -283,14 +358,12 @@ avg_temp = df[temp_col].mean() if temp_col is not None else np.nan
 avg_pressure = df[pressure_col].mean() if pressure_col is not None else np.nan
 avg_ti = df[ti_col].mean()
 
-# MSA / MPDA용
 msa_valid = df[[ws_col, wd_col, ti_col]].notna().all(axis=1)
 if pkt_col in df.columns:
     mpda_valid = msa_valid & df[pkt_col].notna() & (df[pkt_col] > 0)
 else:
     mpda_valid = msa_valid.copy()
 
-msa_ratio_total = msa_valid.mean() * 100 if len(df) > 0 else np.nan
 mpda_ratio_total = mpda_valid.mean() * 100 if len(df) > 0 else np.nan
 
 c1, c2, c3 = st.columns(3)
@@ -311,14 +384,7 @@ with c6:
     st.metric("평균 Pressure", "-" if pd.isna(avg_pressure) else f"{avg_pressure:.2f}")
 
 st.write(f"평균 난류강도: **{'-' if pd.isna(avg_ti) else f'{avg_ti:.3f}'}**")
-st.write(f"누적 MSA: **{'-' if pd.isna(msa_ratio_total) else f'{msa_ratio_total:.2f}%'}**")
 st.write(f"누적 MPDA: **{'-' if pd.isna(mpda_ratio_total) else f'{mpda_ratio_total:.2f}%'}**")
-
-st.write(f"업로드 파일 수: **{len(uploaded_files)}개**")
-st.dataframe(
-    pd.DataFrame({"파일명": [f.name for f in uploaded_files]}),
-    use_container_width=True
-)
 
 # ============================================================
 # 그래프
@@ -449,7 +515,7 @@ if compare_heights:
     else:
         st.info("비교 가능한 풍속 높이 컬럼이 없습니다.")
 
-# 8) 일별 MSA / MPDA 막대 2개 그래프
+# 8) Daily MSA / MPDA
 st.markdown(f"### 8) Daily MSA / MPDA @{selected_height}m")
 
 df_daily = df[[time_col, ws_col, wd_col, ti_col]].copy()
@@ -497,7 +563,6 @@ plt.legend()
 plt.tight_layout()
 st.pyplot(fig_av)
 
-cum_msa = daily["MSA_count"].sum() / daily["total"].sum() * 100 if daily["total"].sum() > 0 else np.nan
 cum_mpda = daily["MPDA_count"].sum() / daily["total"].sum() * 100 if daily["total"].sum() > 0 else np.nan
 
 st.write(
@@ -505,6 +570,32 @@ st.write(
     f"(유효 {daily['MPDA_count'].sum():,} / 전체 {daily['total'].sum():,})"
 )
 
+# 9) GPS 좌표 그림
+st.markdown("### 9) GPS 좌표 그림")
+
+gps_plot_df = df[["latitude", "longitude", time_col]].dropna().copy()
+
+if len(gps_plot_df) == 0:
+    st.info("GPS 좌표 데이터가 없어 그림을 그릴 수 없습니다.")
+else:
+    fig_gps = plt.figure(figsize=(8, 8))
+    plt.scatter(gps_plot_df["longitude"], gps_plot_df["latitude"], s=8)
+
+    start_row = gps_plot_df.iloc[0]
+    end_row = gps_plot_df.iloc[-1]
+
+    plt.scatter(start_row["longitude"], start_row["latitude"], s=60, marker="o", label="Start")
+    plt.scatter(end_row["longitude"], end_row["latitude"], s=80, marker="*", label="End")
+
+    plt.title("GPS Track")
+    plt.xlabel("Longitude")
+    plt.ylabel("Latitude")
+    plt.legend()
+    plt.tight_layout()
+    st.pyplot(fig_gps)
+
+    st.write(f"시작 좌표: **({start_row['latitude']:.6f}, {start_row['longitude']:.6f})**")
+    st.write(f"마지막 좌표: **({end_row['latitude']:.6f}, {end_row['longitude']:.6f})**")
 
 # ============================================================
 # 데이터 미리보기
