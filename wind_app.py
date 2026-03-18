@@ -18,6 +18,10 @@ with col1:
 
 with col2:
     st.markdown(
+        st.markdown(
+    "<hr style='border: 1px solid #D6E9FF; margin-top: 0.5rem; margin-bottom: 1rem;'>",
+    unsafe_allow_html=True
+)
         """
         <h1 style='margin-bottom:0; color:#2F80ED;'>
             Wind Monitoring Dashboard
