@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
-from matplotlib.dates import DateFormatter
 
 # ============================================================
 # 기본 설정
@@ -15,9 +14,11 @@ st.title("🌬 Wind Monitoring Dashboard")
 # 유틸 함수
 # ============================================================
 def circular_mean_deg(series):
+    """풍향 원형평균"""
     s = pd.to_numeric(series, errors="coerce").dropna()
     if len(s) == 0:
         return np.nan
+
     rad = np.deg2rad(s)
     mean_sin = np.sin(rad).mean()
     mean_cos = np.cos(rad).mean()
@@ -26,27 +27,58 @@ def circular_mean_deg(series):
 
 
 def extract_available_heights(columns):
+    """헤더에서 사용 가능한 높이 목록 추출"""
     heights = set()
+
     patterns = [
         r"Wind Direction \(deg\) at (\d+)m \(corrected\)",
         r"Horizontal Wind Speed \(m/s\) at (\d+)m",
         r"TI at (\d+)m",
         r"Packets in Average at (\d+)m",
     ]
+
     for col in columns:
         for pattern in patterns:
             m = re.search(pattern, str(col))
             if m:
                 heights.add(int(m.group(1)))
+
     return sorted(heights, reverse=True)
 
 
 def get_height_columns(height):
+    """선택 높이에 해당하는 컬럼명 생성"""
     wd_col = f"Wind Direction (deg) at {height}m (corrected)"
     ws_col = f"Horizontal Wind Speed (m/s) at {height}m"
     ti_col = f"TI at {height}m"
     pkt_col = f"Packets in Average at {height}m"
     return wd_col, ws_col, ti_col, pkt_col
+
+
+def parse_gps_column(series):
+    """
+    GPS 컬럼 예시:
+    '35.62986 125.90870'
+    -> latitude, longitude 분리
+    """
+    s = series.astype(str).str.strip()
+
+    # 쉼표/탭도 공백으로 통일
+    s = s.str.replace(",", " ", regex=False)
+    s = s.str.replace("\t", " ", regex=False)
+
+    parts = s.str.split(r"\s+", expand=True)
+
+    if parts.shape[1] < 2:
+        return pd.DataFrame({"latitude": np.nan, "longitude": np.nan})
+
+    lat = pd.to_numeric(parts[0], errors="coerce")
+    lon = pd.to_numeric(parts[1], errors="coerce")
+
+    return pd.DataFrame({
+        "latitude": lat,
+        "longitude": lon
+    })
 
 
 # ============================================================
@@ -64,6 +96,8 @@ if not uploaded_files:
 
 # ============================================================
 # CSV 읽기
+# - 첫 줄은 메타정보
+# - 둘째 줄이 실제 헤더
 # ============================================================
 dfs = []
 
@@ -88,6 +122,9 @@ if len(dfs) == 0:
 
 df = pd.concat(dfs, ignore_index=True)
 
+# ============================================================
+# 컬럼 확인
+# ============================================================
 with st.expander("현재 컬럼명 확인"):
     st.write("컬럼 개수:", len(df.columns))
     st.write("앞 30개 컬럼명:", list(df.columns[:30]))
@@ -98,6 +135,7 @@ with st.expander("현재 컬럼명 확인"):
 time_col = "Time and Date"
 temp_col = "Met Air Temp. (C)"
 pressure_col = "Met Pressure (mbar)"
+gps_col = "GPS"
 
 if time_col not in df.columns:
     st.error(f"시간 컬럼을 찾지 못했습니다: {time_col}")
@@ -110,8 +148,11 @@ if temp_col not in df.columns:
 if pressure_col not in df.columns:
     pressure_col = None
 
+if gps_col not in df.columns:
+    gps_col = None
+
 # ============================================================
-# 높이 목록
+# 높이 추출
 # ============================================================
 available_heights = extract_available_heights(df.columns)
 
@@ -149,7 +190,7 @@ with st.sidebar:
     max_ti = st.number_input("난류강도 최대값", value=1.0)
 
 # ============================================================
-# 선택 높이 컬럼
+# 선택 높이 컬럼명
 # ============================================================
 wd_col, ws_col, ti_col, pkt_col = get_height_columns(selected_height)
 
@@ -178,13 +219,10 @@ if pressure_col is not None:
     numeric_cols.append(pressure_col)
 
 for h in available_heights:
-    _, ws_h, ti_h, pkt_h = get_height_columns(h)
-    if ws_h in df.columns:
-        numeric_cols.append(ws_h)
-    if ti_h in df.columns:
-        numeric_cols.append(ti_h)
-    if pkt_h in df.columns:
-        numeric_cols.append(pkt_h)
+    wd_h, ws_h, ti_h, pkt_h = get_height_columns(h)
+    for c in [wd_h, ws_h, ti_h, pkt_h]:
+        if c in df.columns:
+            numeric_cols.append(c)
 
 numeric_cols = list(dict.fromkeys(numeric_cols))
 
@@ -192,7 +230,18 @@ for col in numeric_cols:
     df[col] = pd.to_numeric(df[col], errors="coerce")
 
 # ============================================================
-# 필터
+# GPS 파싱
+# ============================================================
+if gps_col is not None:
+    gps_df = parse_gps_column(df[gps_col])
+    df["latitude"] = gps_df["latitude"]
+    df["longitude"] = gps_df["longitude"]
+else:
+    df["latitude"] = np.nan
+    df["longitude"] = np.nan
+
+# ============================================================
+# 필터 적용
 # ============================================================
 df.loc[df[ws_col] > max_ws, ws_col] = np.nan
 df.loc[df[ws_col] < min_ws, ws_col] = np.nan
@@ -204,12 +253,13 @@ if use_ti_filter:
     df.loc[df[ti_col] > max_ti, ti_col] = np.nan
 
 # ============================================================
-# 확인창
+# 사용 컬럼 / 시간 확인
 # ============================================================
 with st.expander("사용 컬럼 확인"):
     st.write("시간 컬럼:", time_col)
     st.write("온도 컬럼:", temp_col)
     st.write("Pressure 컬럼:", pressure_col)
+    st.write("GPS 컬럼:", gps_col)
     st.write("풍속 컬럼:", ws_col)
     st.write("풍향 컬럼:", wd_col)
     st.write("난류강도 컬럼:", ti_col)
@@ -233,9 +283,15 @@ avg_temp = df[temp_col].mean() if temp_col is not None else np.nan
 avg_pressure = df[pressure_col].mean() if pressure_col is not None else np.nan
 avg_ti = df[ti_col].mean()
 
-valid_mask = df[[ws_col, wd_col, ti_col]].notna().all(axis=1)
-valid_ratio_total = valid_mask.mean() * 100 if len(df) > 0 else np.nan
-valid_count_total = int(valid_mask.sum())
+# MSA / MPDA용
+msa_valid = df[[ws_col, wd_col, ti_col]].notna().all(axis=1)
+if pkt_col in df.columns:
+    mpda_valid = msa_valid & df[pkt_col].notna() & (df[pkt_col] > 0)
+else:
+    mpda_valid = msa_valid.copy()
+
+msa_ratio_total = msa_valid.mean() * 100 if len(df) > 0 else np.nan
+mpda_ratio_total = mpda_valid.mean() * 100 if len(df) > 0 else np.nan
 
 c1, c2, c3 = st.columns(3)
 c4, c5, c6 = st.columns(3)
@@ -255,8 +311,8 @@ with c6:
     st.metric("평균 Pressure", "-" if pd.isna(avg_pressure) else f"{avg_pressure:.2f}")
 
 st.write(f"평균 난류강도: **{'-' if pd.isna(avg_ti) else f'{avg_ti:.3f}'}**")
-st.write(f"전체 유효데이터율: **{'-' if pd.isna(valid_ratio_total) else f'{valid_ratio_total:.2f}%'}**")
-st.write(f"전체 유효데이터 개수: **{valid_count_total:,}** / {len(df):,}")
+st.write(f"누적 MSA: **{'-' if pd.isna(msa_ratio_total) else f'{msa_ratio_total:.2f}%'}**")
+st.write(f"누적 MPDA: **{'-' if pd.isna(mpda_ratio_total) else f'{mpda_ratio_total:.2f}%'}**")
 
 st.write(f"업로드 파일 수: **{len(uploaded_files)}개**")
 st.dataframe(
@@ -269,7 +325,7 @@ st.dataframe(
 # ============================================================
 st.subheader(f"📈 그래프 ({selected_height}m 기준)")
 
-# 1) 풍속
+# 1) 풍속 그래프
 st.markdown("### 1) 풍속 그래프")
 fig1 = plt.figure(figsize=(12, 4))
 plt.plot(df[time_col], df[ws_col])
@@ -280,7 +336,7 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 st.pyplot(fig1)
 
-# 2) 풍향
+# 2) 풍향 그래프
 st.markdown("### 2) 풍향 그래프")
 fig2 = plt.figure(figsize=(12, 4))
 plt.plot(df[time_col], df[wd_col])
@@ -292,7 +348,7 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 st.pyplot(fig2)
 
-# 3) 온도
+# 3) 온도 그래프
 if temp_col is not None:
     st.markdown("### 3) 온도 그래프")
     fig3 = plt.figure(figsize=(12, 4))
@@ -304,7 +360,7 @@ if temp_col is not None:
     plt.tight_layout()
     st.pyplot(fig3)
 
-# 4) 난류강도
+# 4) 난류강도 그래프
 st.markdown("### 4) 난류강도 그래프")
 fig4 = plt.figure(figsize=(12, 4))
 plt.plot(df[time_col], df[ti_col])
@@ -315,7 +371,7 @@ plt.xticks(rotation=30)
 plt.tight_layout()
 st.pyplot(fig4)
 
-# 5) Pressure
+# 5) Pressure 그래프
 if pressure_col is not None:
     st.markdown("### 5) Pressure 그래프")
     fig5 = plt.figure(figsize=(12, 4))
@@ -369,15 +425,13 @@ try:
 except Exception as e:
     st.warning(f"Wind Rose 생성 실패: {e}")
 
-# ============================================================
 # 7) 높이별 풍속 비교 그래프
-# ============================================================
 if compare_heights:
     st.markdown("### 7) 높이별 풍속 비교 그래프")
 
     fig_cmp = plt.figure(figsize=(12, 5))
-
     plotted = False
+
     for h in compare_heights:
         _, ws_h, _, _ = get_height_columns(h)
         if ws_h in df.columns:
@@ -395,47 +449,97 @@ if compare_heights:
     else:
         st.info("비교 가능한 풍속 높이 컬럼이 없습니다.")
 
-# ============================================================
-# 8) 일별 유효데이터율 그래프
-# ============================================================
-st.markdown(f"### 8) 일별 유효데이터율 ({selected_height}m 기준)")
+# 8) 일별 MSA / MPDA 막대 2개 그래프
+st.markdown(f"### 8) Daily MSA / MPDA @{selected_height}m")
 
-df_valid = df[[time_col, ws_col, wd_col, ti_col]].copy()
-df_valid["date"] = df_valid[time_col].dt.date
-df_valid["valid"] = df_valid[[ws_col, wd_col, ti_col]].notna().all(axis=1).astype(int)
+df_daily = df[[time_col, ws_col, wd_col, ti_col]].copy()
+if pkt_col in df.columns:
+    df_daily[pkt_col] = df[pkt_col]
 
-daily_valid = (
-    df_valid.groupby("date")
-    .agg(total_count=("valid", "size"),
-         valid_count=("valid", "sum"))
+df_daily["date"] = df_daily[time_col].dt.date
+df_daily["MSA_valid"] = df_daily[[ws_col, wd_col, ti_col]].notna().all(axis=1).astype(int)
+
+if pkt_col in df.columns:
+    df_daily["MPDA_valid"] = (
+        df_daily[[ws_col, wd_col, ti_col]].notna().all(axis=1) &
+        df_daily[pkt_col].notna() &
+        (df_daily[pkt_col] > 0)
+    ).astype(int)
+else:
+    df_daily["MPDA_valid"] = df_daily["MSA_valid"]
+
+daily = (
+    df_daily.groupby("date")
+    .agg(
+        total=("date", "size"),
+        MSA_count=("MSA_valid", "sum"),
+        MPDA_count=("MPDA_valid", "sum")
+    )
     .reset_index()
 )
 
-daily_valid["valid_pct"] = np.where(
-    daily_valid["total_count"] > 0,
-    daily_valid["valid_count"] / daily_valid["total_count"] * 100,
-    np.nan
-)
+daily["MSA_pct"] = np.where(daily["total"] > 0, daily["MSA_count"] / daily["total"] * 100, np.nan)
+daily["MPDA_pct"] = np.where(daily["total"] > 0, daily["MPDA_count"] / daily["total"] * 100, np.nan)
 
 fig_av = plt.figure(figsize=(12, 5))
-plt.bar(pd.to_datetime(daily_valid["date"]), daily_valid["valid_pct"], width=0.8)
-plt.title(f"Daily Valid Data Availability @{selected_height}m")
+x = np.arange(len(daily))
+width = 0.38
+
+plt.bar(x - width / 2, daily["MSA_pct"], width=width, label="MSA")
+plt.bar(x + width / 2, daily["MPDA_pct"], width=width, label="MPDA")
+
+plt.title(f"Daily MSA / MPDA @{selected_height}m")
 plt.xlabel("Date")
 plt.ylabel("Availability (%)")
 plt.ylim(0, 110)
-plt.xticks(rotation=30)
+plt.xticks(x, pd.to_datetime(daily["date"]).dt.strftime("%d-%b"), rotation=45)
+plt.legend()
 plt.tight_layout()
 st.pyplot(fig_av)
 
-cum_valid_pct = (
-    daily_valid["valid_count"].sum() / daily_valid["total_count"].sum() * 100
-    if daily_valid["total_count"].sum() > 0 else np.nan
-)
+cum_msa = daily["MSA_count"].sum() / daily["total"].sum() * 100 if daily["total"].sum() > 0 else np.nan
+cum_mpda = daily["MPDA_count"].sum() / daily["total"].sum() * 100 if daily["total"].sum() > 0 else np.nan
 
 st.write(
-    f"누적 유효데이터율: **{'-' if pd.isna(cum_valid_pct) else f'{cum_valid_pct:.2f}%'}** "
-    f"(유효 {daily_valid['valid_count'].sum():,} / 전체 {daily_valid['total_count'].sum():,})"
+    f"누적 MSA: **{'-' if pd.isna(cum_msa) else f'{cum_msa:.2f}%'}** "
+    f"(유효 {daily['MSA_count'].sum():,} / 전체 {daily['total'].sum():,})"
 )
+st.write(
+    f"누적 MPDA: **{'-' if pd.isna(cum_mpda) else f'{cum_mpda:.2f}%'}** "
+    f"(유효 {daily['MPDA_count'].sum():,} / 전체 {daily['total'].sum():,})"
+)
+
+# 9) GPS 좌표 그림
+st.markdown("### 9) GPS 좌표 그림")
+
+gps_plot_df = df[["latitude", "longitude", time_col]].dropna().copy()
+
+if len(gps_plot_df) == 0:
+    st.info("GPS 좌표 데이터가 없어 그림을 그릴 수 없습니다.")
+else:
+    fig_gps = plt.figure(figsize=(8, 8))
+    plt.scatter(gps_plot_df["longitude"], gps_plot_df["latitude"], s=8)
+
+    # 시작점 / 마지막점 표시
+    start_row = gps_plot_df.iloc[0]
+    end_row = gps_plot_df.iloc[-1]
+
+    plt.scatter(start_row["longitude"], start_row["latitude"], s=60, marker="o", label="Start")
+    plt.scatter(end_row["longitude"], end_row["latitude"], s=60, marker="*", label="End")
+
+    plt.title("GPS Track")
+    plt.xlabel("Longitude")
+    plt.ylabel("Latitude")
+    plt.legend()
+    plt.tight_layout()
+    st.pyplot(fig_gps)
+
+    st.write(
+        f"시작 좌표: **({start_row['latitude']:.6f}, {start_row['longitude']:.6f})**"
+    )
+    st.write(
+        f"마지막 좌표: **({end_row['latitude']:.6f}, {end_row['longitude']:.6f})**"
+    )
 
 # ============================================================
 # 데이터 미리보기
@@ -447,5 +551,7 @@ if temp_col is not None:
     preview_cols.insert(3, temp_col)
 if pressure_col is not None:
     preview_cols.insert(4 if temp_col is not None else 3, pressure_col)
+if gps_col is not None:
+    preview_cols.append(gps_col)
 
 st.dataframe(df[preview_cols].head(50), use_container_width=True)
