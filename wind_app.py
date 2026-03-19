@@ -160,13 +160,17 @@ def load_latest_meta():
     except Exception:
         return None
 
-
 admin_password_input = st.sidebar.text_input(
     "관리자 비밀번호",
     type="password"
 )
 
 admin_password = st.secrets.get("ADMIN_PASSWORD", "")
+
+# 🔥 디버그 출력 (여기 추가)
+st.sidebar.write("ADMIN_PASSWORD 존재:", "ADMIN_PASSWORD" in st.secrets)
+st.sidebar.write("읽힌 비밀번호:", repr(admin_password))
+st.sidebar.write("입력값:", repr(admin_password_input))
 
 is_admin = (
     admin_password_input.strip() == admin_password.strip()
@@ -177,6 +181,7 @@ if is_admin:
     st.sidebar.success("관리자 모드")
 else:
     st.sidebar.info("보기 전용 모드")
+
 # ============================================================
 # 관리자만 업로드 가능
 # ============================================================
