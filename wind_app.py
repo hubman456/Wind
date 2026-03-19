@@ -167,10 +167,6 @@ admin_password_input = st.sidebar.text_input(
 
 admin_password = st.secrets.get("ADMIN_PASSWORD", "")
 
-# 🔥 디버그 출력 (여기 추가)
-st.sidebar.write("ADMIN_PASSWORD 존재:", "ADMIN_PASSWORD" in st.secrets)
-st.sidebar.write("읽힌 비밀번호:", repr(admin_password))
-st.sidebar.write("입력값:", repr(admin_password_input))
 
 is_admin = (
     admin_password_input.strip() == admin_password.strip()
